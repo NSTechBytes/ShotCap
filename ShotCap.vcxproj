@@ -130,7 +130,13 @@
     <ClCompile Include="ShotCap.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="assets\icon.png" />
+    <Image Include="assets\icon.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="resource.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Resource.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -14,7 +14,7 @@
 #define SetProcessDpiAwarenessContext(x) SetProcessDPIAware()
 #endif
 
-#include <gdiplus.h> 
+#include <gdiplus.h>  
 #include <shellscalingapi.h>  // For DPI functions
 #include <iostream>
 #include <sstream>
@@ -135,8 +135,8 @@ RECT GetSelectionRect(HINSTANCE hInstance)
 HGLOBAL CreateDIBFromHBITMAP(HBITMAP hBitmap)
 {
     BITMAP bm;
-    if (!GetObject(hBitmap, sizeof(bm), &bm))
-        return NULL;
+    if (!GetObject(hBitmap, sizeof(bm), &bm)) 
+        return NULL; 
     BITMAPINFOHEADER bi;
     ZeroMemory(&bi, sizeof(bi));
     bi.biSize = sizeof(BITMAPINFOHEADER);
@@ -148,7 +148,7 @@ HGLOBAL CreateDIBFromHBITMAP(HBITMAP hBitmap)
     int lineBytes = ((bm.bmWidth * bm.bmBitsPixel + 31) & ~31) / 8;
     DWORD dwSize = lineBytes * bm.bmHeight;
     DWORD dwMemSize = sizeof(BITMAPINFOHEADER) + dwSize;
-    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, dwMemSize);
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, dwMemSize); 
     if (!hMem)
         return NULL;
     LPVOID pMem = GlobalLock(hMem);
@@ -159,7 +159,7 @@ HGLOBAL CreateDIBFromHBITMAP(HBITMAP hBitmap)
     }
     memcpy(pMem, &bi, sizeof(BITMAPINFOHEADER));
     LPVOID pBits = (LPBYTE)pMem + sizeof(BITMAPINFOHEADER);
-    HDC hDC = GetDC(NULL);
+    HDC hDC = GetDC(NULL); 
     if (!hDC)
     {
         GlobalUnlock(hMem);
