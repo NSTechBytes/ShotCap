@@ -1,11 +1,25 @@
+// Define _WIN32_WINNT if not already defined (set to Windows 10)
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00
+#endif
+
 #include <windows.h>
-#include <gdiplus.h>
-#include <shellscalingapi.h>  // For DPI awareness
+#include <windowsx.h>  // For GET_X_LPARAM and GET_Y_LPARAM macros
+#ifndef PW_RENDERFULLCONTENT
+#define PW_RENDERFULLCONTENT 0x00000002
+#endif
+
+// Fallback: if SetProcessDpiAwarenessContext is not defined, define it to call SetProcessDPIAware.
+#ifndef SetProcessDpiAwarenessContext
+#define SetProcessDpiAwarenessContext(x) SetProcessDPIAware()
+#endif
+
+#include <gdiplus.h> 
+#include <shellscalingapi.h>  // For DPI functions
 #include <iostream>
 #include <sstream>
 #include <vector>
-#include <string>
-#include <cstring>
+#include <string> 
 #include <iomanip>
 #include <ctime>
 #include <algorithm>
@@ -15,50 +29,146 @@
 
 using namespace Gdiplus;
 
-//------------------------------------------------------------------------------
-// Helper: Convert an HBITMAP to a DIB in global memory for clipboard use.
-// Returns an HGLOBAL containing a BITMAPINFOHEADER and pixel data.
+//---------------------------------------------------------------------
+// Global variable to store the selected rectangle in interactive mode.
+static RECT g_selRect = { 0, 0, 0, 0 };
+
+//---------------------------------------------------------------------
+// Window Procedure for the interactive selection overlay.
+LRESULT CALLBACK SelectionWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    static POINT startPoint = { 0, 0 };
+    switch (message)
+    {
+    case WM_LBUTTONDOWN:
+        SetCapture(hWnd);
+        startPoint.x = GET_X_LPARAM(lParam);
+        startPoint.y = GET_Y_LPARAM(lParam);
+        g_selRect.left = startPoint.x;
+        g_selRect.top = startPoint.y;
+        g_selRect.right = startPoint.x;
+        g_selRect.bottom = startPoint.y;
+        InvalidateRect(hWnd, NULL, TRUE);
+        break;
+    case WM_MOUSEMOVE:
+        if (wParam & MK_LBUTTON)
+        {
+            POINT currentPoint;
+            currentPoint.x = GET_X_LPARAM(lParam);
+            currentPoint.y = GET_Y_LPARAM(lParam);
+            g_selRect.left = min(startPoint.x, currentPoint.x);
+            g_selRect.top = min(startPoint.y, currentPoint.y);
+            g_selRect.right = max(startPoint.x, currentPoint.x);
+            g_selRect.bottom = max(startPoint.y, currentPoint.y);
+            InvalidateRect(hWnd, NULL, TRUE);
+        }
+        break;
+    case WM_LBUTTONUP:
+        ReleaseCapture();
+        PostQuitMessage(0);
+        break;
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        // Draw a semi-transparent black overlay.
+        HBRUSH hOverlay = CreateSolidBrush(RGB(0, 0, 0));
+        SetBkMode(hdc, TRANSPARENT);
+        FillRect(hdc, &ps.rcPaint, hOverlay);
+        DeleteObject(hOverlay);
+        // Draw the selection rectangle (red outline).
+        HPEN hPen = CreatePen(PS_SOLID, 2, RGB(255, 0, 0));
+        HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+        Rectangle(hdc, g_selRect.left, g_selRect.top, g_selRect.right, g_selRect.bottom);
+        SelectObject(hdc, hOldPen);
+        DeleteObject(hPen);
+        EndPaint(hWnd, &ps);
+    }
+    break;
+    default:
+        return DefWindowProc(hWnd, message, wParam, lParam);
+    }
+    return 0;
+}
+
+//---------------------------------------------------------------------
+// Create a full-screen overlay for interactive selection and return the selected RECT.
+RECT GetSelectionRect(HINSTANCE hInstance)
+{
+    const wchar_t CLASS_NAME[] = L"SelectionWindowClass";
+    WNDCLASS wc = { };
+    wc.lpfnWndProc = SelectionWndProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = CLASS_NAME;
+    wc.hCursor = LoadCursor(NULL, IDC_CROSS); // Set crosshair cursor
+    RegisterClass(&wc);
+
+    HWND hwnd = CreateWindowEx(
+        WS_EX_TOPMOST | WS_EX_LAYERED, // Extended styles: topmost & layered.
+        CLASS_NAME, L"Select Area", WS_POPUP,
+        0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+        NULL, NULL, hInstance, NULL
+    );
+    if (!hwnd)
+    {
+        std::cerr << "Failed to create selection window." << std::endl;
+        RECT r = { 0, 0, 0, 0 };
+        return r;
+    }
+    // Set the window opacity to 50%.
+    SetLayeredWindowAttributes(hwnd, 0, (BYTE)(255 * 0.5), LWA_ALPHA);
+    ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
+
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0))
+    {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+    DestroyWindow(hwnd);
+    return g_selRect;
+}
+
+//---------------------------------------------------------------------
+// Helper: Convert an HBITMAP to a DIB stored in global memory for clipboard use.
 HGLOBAL CreateDIBFromHBITMAP(HBITMAP hBitmap)
 {
     BITMAP bm;
     if (!GetObject(hBitmap, sizeof(bm), &bm))
         return NULL;
-
     BITMAPINFOHEADER bi;
     ZeroMemory(&bi, sizeof(bi));
     bi.biSize = sizeof(BITMAPINFOHEADER);
     bi.biWidth = bm.bmWidth;
-    bi.biHeight = bm.bmHeight; // bottom-up DIB
+    bi.biHeight = bm.bmHeight;
     bi.biPlanes = 1;
     bi.biBitCount = bm.bmBitsPixel;
     bi.biCompression = BI_RGB;
-
     int lineBytes = ((bm.bmWidth * bm.bmBitsPixel + 31) & ~31) / 8;
     DWORD dwSize = lineBytes * bm.bmHeight;
     DWORD dwMemSize = sizeof(BITMAPINFOHEADER) + dwSize;
-
     HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, dwMemSize);
     if (!hMem)
         return NULL;
-
     LPVOID pMem = GlobalLock(hMem);
-    if (!pMem) {
+    if (!pMem)
+    {
         GlobalFree(hMem);
         return NULL;
     }
-
     memcpy(pMem, &bi, sizeof(BITMAPINFOHEADER));
     LPVOID pBits = (LPBYTE)pMem + sizeof(BITMAPINFOHEADER);
-
     HDC hDC = GetDC(NULL);
-    if (!hDC) {
+    if (!hDC)
+    {
         GlobalUnlock(hMem);
         GlobalFree(hMem);
         return NULL;
     }
-
     BITMAPINFO* pbi = (BITMAPINFO*)pMem;
-    if (!GetDIBits(hDC, hBitmap, 0, bm.bmHeight, pBits, pbi, DIB_RGB_COLORS)) {
+    if (!GetDIBits(hDC, hBitmap, 0, bm.bmHeight, pBits, pbi, DIB_RGB_COLORS))
+    {
         ReleaseDC(NULL, hDC);
         GlobalUnlock(hMem);
         GlobalFree(hMem);
@@ -69,33 +179,33 @@ HGLOBAL CreateDIBFromHBITMAP(HBITMAP hBitmap)
     return hMem;
 }
 
-//------------------------------------------------------------------------------
+//---------------------------------------------------------------------
 // Helper: Retrieve the CLSID of an image encoder (e.g., PNG, JPEG, BMP).
 int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
 {
     UINT num = 0, size = 0;
     if (GetImageEncodersSize(&num, &size) != Ok || size == 0)
         return -1;
-
-    ImageCodecInfo* pImageCodecInfo = (ImageCodecInfo*)malloc(size);
+    // Use new[] instead of malloc to avoid warnings.
+    ImageCodecInfo* pImageCodecInfo = new ImageCodecInfo[size];
     if (!pImageCodecInfo)
         return -1;
-
     GetImageEncoders(num, size, pImageCodecInfo);
+    int retVal = -1;
     for (UINT j = 0; j < num; ++j)
     {
         if (wcscmp(pImageCodecInfo[j].MimeType, format) == 0)
         {
             *pClsid = pImageCodecInfo[j].Clsid;
-            free(pImageCodecInfo);
-            return j;
+            retVal = j;
+            break;
         }
     }
-    free(pImageCodecInfo);
-    return -1;
+    delete[] pImageCodecInfo;
+    return retVal;
 }
 
-//------------------------------------------------------------------------------
+//---------------------------------------------------------------------
 // Print usage instructions.
 void printUsage()
 {
@@ -105,8 +215,9 @@ void printUsage()
         << "  -dir <directory>      Output directory (default: current directory)\n"
         << "  -d <delay>            Delay in seconds before capturing (default: 0)\n"
         << "  -r <x,y,w,h>          Capture region (default: full screen)\n"
+        << "  -select               Interactively select a region with the mouse\n"
         << "  -format <format>      Image format: png, jpg, bmp (default: png)\n"
-        << "  -quality <0-100>      JPEG quality (only applies when -format jpg, default: 90)\n"
+        << "  -quality <0-100>      JPEG quality (only for -format jpg, default: 90)\n"
         << "  -w <window_title>     Capture a specific window by its title\n"
         << "  -active               Capture the active (foreground) window\n"
         << "  -m <monitor_index>    Capture a specific monitor (0-based index)\n"
@@ -121,7 +232,7 @@ void printUsage()
         << "  -h, --help            Display this help message\n";
 }
 
-//------------------------------------------------------------------------------
+//---------------------------------------------------------------------
 // Utility: Split a string by a delimiter.
 std::vector<std::string> split(const std::string& s, char delimiter)
 {
@@ -133,13 +244,13 @@ std::vector<std::string> split(const std::string& s, char delimiter)
     return tokens;
 }
 
-//------------------------------------------------------------------------------
+//---------------------------------------------------------------------
 // Structure to store monitor information.
 struct MonitorInfo {
     RECT rect;
 };
 
-// Callback for enumerating monitors.
+// Callback for enumerating monitors. Parameter type is HMONITOR.
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC, LPRECT lprcMonitor, LPARAM dwData)
 {
     std::vector<MonitorInfo>* monitors = reinterpret_cast<std::vector<MonitorInfo>*>(dwData);
@@ -149,7 +260,7 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC, LPRECT lprcMonitor, LPARAM
     return TRUE;
 }
 
-//------------------------------------------------------------------------------
+//---------------------------------------------------------------------
 // Callback for enumerating top-level windows.
 BOOL CALLBACK EnumWindowsProc(HWND hWnd, LPARAM lParam)
 {
@@ -167,8 +278,8 @@ BOOL CALLBACK EnumWindowsProc(HWND hWnd, LPARAM lParam)
     return TRUE;
 }
 
-//------------------------------------------------------------------------------
-// Annotate the captured image with a timestamp (or custom text) at the bottom-right.
+//---------------------------------------------------------------------
+// Annotate the captured image with a timestamp at the bottom-right.
 void AnnotateImage(Bitmap* bmp, const std::wstring& text, bool verbose)
 {
     Graphics graphics(bmp);
@@ -179,15 +290,16 @@ void AnnotateImage(Bitmap* bmp, const std::wstring& text, bool verbose)
     SolidBrush brush(Color(255, 255, 255, 255)); // White text
     SolidBrush shadowBrush(Color(128, 0, 0, 0));   // Black shadow
 
-    RectF layoutRect;
+    RectF layoutRect(0, 0, static_cast<REAL>(bmp->GetWidth()), static_cast<REAL>(bmp->GetHeight()));
     StringFormat format;
     format.SetAlignment(StringAlignmentFar);
     format.SetLineAlignment(StringAlignmentFar);
     RectF bound;
-    graphics.MeasureString(text.c_str(), -1, &font, RectF(0, 0, bmp->GetWidth(), bmp->GetHeight()), &format, &bound);
+    graphics.MeasureString(text.c_str(), -1, &font, layoutRect, &format, &bound);
 
     float margin = 10.0f;
-    PointF position(bmp->GetWidth() - bound.Width - margin, bmp->GetHeight() - bound.Height - margin);
+    PointF position(static_cast<REAL>(bmp->GetWidth()) - bound.Width - margin,
+        static_cast<REAL>(bmp->GetHeight()) - bound.Height - margin);
 
     graphics.DrawString(text.c_str(), -1, &font, PointF(position.X + 2, position.Y + 2), &format, &shadowBrush);
     graphics.DrawString(text.c_str(), -1, &font, position, &format, &brush);
@@ -196,19 +308,18 @@ void AnnotateImage(Bitmap* bmp, const std::wstring& text, bool verbose)
         std::wcout << L"[INFO] Timestamp annotation applied: " << text << std::endl;
 }
 
-//------------------------------------------------------------------------------
+//---------------------------------------------------------------------
+// Main function.
 int main(int argc, char* argv[])
 {
     // --- DPI Awareness Setup ---
     if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
-    {
         SetProcessDPIAware();
-    }
     // --------------------------------
 
     // Default parameters.
     std::wstring outputFile = L"screenshot.png";
-    std::wstring outputDir = L""; // if empty, use current directory.
+    std::wstring outputDir = L""; // Use current directory if empty.
     int delaySeconds = 0;
     bool regionSpecified = false;
     int regionX = 0, regionY = 0, regionW = 0, regionH = 0;
@@ -227,6 +338,7 @@ int main(int argc, char* argv[])
     bool verbose = false;
     bool listMonitors = false;
     bool listWindows = false;
+    bool interactiveSelect = false;
 
     // Parse command-line arguments.
     for (int i = 1; i < argc; i++)
@@ -262,7 +374,7 @@ int main(int argc, char* argv[])
         }
         else if (arg == "-r" && i + 1 < argc)
         {
-            std::vector<std::string> parts = split(argv[i + 1], ',');
+            auto parts = split(argv[i + 1], ',');
             if (parts.size() == 4)
             {
                 regionX = std::stoi(parts[0]);
@@ -277,6 +389,10 @@ int main(int argc, char* argv[])
                 return -1;
             }
             i++;
+        }
+        else if (arg == "-select")
+        {
+            interactiveSelect = true;
         }
         else if (arg == "-format" && i + 1 < argc)
         {
@@ -368,7 +484,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    // If listing monitors is requested.
+    // List monitors if requested.
     if (listMonitors)
     {
         std::vector<MonitorInfo> monitors;
@@ -389,13 +505,33 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    // If listing windows is requested.
+    // List windows if requested.
     if (listWindows)
     {
         std::wstringstream ss;
         EnumWindows(EnumWindowsProc, (LPARAM)&ss);
         std::wcout << L"Visible windows:\n" << ss.str();
         return 0;
+    }
+
+    // If interactive selection is enabled, override region settings.
+    if (interactiveSelect)
+    {
+        if (verbose)
+            std::wcout << L"[INFO] Entering interactive selection mode...\n";
+        HINSTANCE hInstance = GetModuleHandle(NULL);
+        RECT selRect = GetSelectionRect(hInstance);
+        regionX = selRect.left;
+        regionY = selRect.top;
+        regionW = selRect.right - selRect.left;
+        regionH = selRect.bottom - selRect.top;
+        regionSpecified = true;
+        if (verbose)
+        {
+            std::wcout << L"[INFO] Selected region: ("
+                << regionX << L"," << regionY << L","
+                << regionW << L"," << regionH << L")\n";
+        }
     }
 
     if (verbose)
@@ -535,7 +671,7 @@ int main(int argc, char* argv[])
             if (!hCaptureDC)
             {
                 std::cerr << "Failed to create compatible DC." << std::endl;
-                if (!captureActiveWindow && (!windowTitle.empty() || monitorIndex != -1 || regionSpecified))
+                if (hSourceDC)
                     ReleaseDC(NULL, hSourceDC);
                 return false;
             }
@@ -544,7 +680,7 @@ int main(int argc, char* argv[])
             {
                 std::cerr << "Failed to create compatible bitmap." << std::endl;
                 DeleteDC(hCaptureDC);
-                if (!captureActiveWindow && (!windowTitle.empty() || monitorIndex != -1 || regionSpecified))
+                if (hSourceDC)
                     ReleaseDC(NULL, hSourceDC);
                 return false;
             }
@@ -554,21 +690,65 @@ int main(int argc, char* argv[])
                 std::cerr << "Failed to select bitmap into DC." << std::endl;
                 DeleteObject(hCaptureBitmap);
                 DeleteDC(hCaptureDC);
-                if (!captureActiveWindow && (!windowTitle.empty() || monitorIndex != -1 || regionSpecified))
+                if (hSourceDC)
                     ReleaseDC(NULL, hSourceDC);
                 return false;
             }
 
-            if (!BitBlt(hCaptureDC, 0, 0, capW, capH,
-                hSourceDC, captureRect.left, captureRect.top, SRCCOPY | CAPTUREBLT))
+            // For window capture, try PrintWindow with PW_RENDERFULLCONTENT, then PW_CLIENTONLY.
+            if (!windowTitle.empty())
             {
-                std::cerr << "BitBlt failed." << std::endl;
-                SelectObject(hCaptureDC, hOld);
-                DeleteObject(hCaptureBitmap);
-                DeleteDC(hCaptureDC);
-                if (!captureActiveWindow && (!windowTitle.empty() || monitorIndex != -1 || regionSpecified))
+                HWND hWnd = FindWindowW(NULL, windowTitle.c_str());
+                BOOL printResult = PrintWindow(hWnd, hCaptureDC, PW_RENDERFULLCONTENT);
+                if (!printResult)
+                {
+                    if (verbose)
+                        std::wcout << L"[INFO] PW_RENDERFULLCONTENT failed, trying PW_CLIENTONLY...\n";
+                    printResult = PrintWindow(hWnd, hCaptureDC, PW_CLIENTONLY);
+                }
+                if (!printResult)
+                {
+                    if (verbose)
+                        std::wcout << L"[INFO] PrintWindow failed; falling back to desktop BitBlt capture...\n";
+                    // Fall back: capture full desktop and crop.
+                    SelectObject(hCaptureDC, hOld);
+                    DeleteObject(hCaptureBitmap);
+                    DeleteDC(hCaptureDC);
                     ReleaseDC(NULL, hSourceDC);
-                return false;
+                    HWND hDesktopWnd = GetDesktopWindow();
+                    hSourceDC = GetDC(hDesktopWnd);
+                    captureRect.left = 0; captureRect.top = 0;
+                    captureRect.right = GetSystemMetrics(SM_CXSCREEN);
+                    captureRect.bottom = GetSystemMetrics(SM_CYSCREEN);
+                    capW = captureRect.right - captureRect.left;
+                    capH = captureRect.bottom - captureRect.top;
+                    hCaptureDC = CreateCompatibleDC(hSourceDC);
+                    hCaptureBitmap = CreateCompatibleBitmap(hSourceDC, capW, capH);
+                    hOld = SelectObject(hCaptureDC, hCaptureBitmap);
+                    if (!BitBlt(hCaptureDC, 0, 0, capW, capH,
+                        hSourceDC, captureRect.left, captureRect.top, SRCCOPY | CAPTUREBLT))
+                    {
+                        std::cerr << "Fallback BitBlt failed." << std::endl;
+                        SelectObject(hCaptureDC, hOld);
+                        DeleteObject(hCaptureBitmap);
+                        DeleteDC(hCaptureDC);
+                        ReleaseDC(NULL, hSourceDC);
+                        return false;
+                    }
+                }
+            }
+            else
+            {
+                if (!BitBlt(hCaptureDC, 0, 0, capW, capH,
+                    hSourceDC, captureRect.left, captureRect.top, SRCCOPY | CAPTUREBLT))
+                {
+                    std::cerr << "BitBlt failed." << std::endl;
+                    SelectObject(hCaptureDC, hOld);
+                    DeleteObject(hCaptureBitmap);
+                    DeleteDC(hCaptureDC);
+                    ReleaseDC(NULL, hSourceDC);
+                    return false;
+                }
             }
 
             if (capturePointer)
@@ -612,7 +792,6 @@ int main(int argc, char* argv[])
                 }
             }
 
-            // Create a GDI+ Bitmap from the captured HBITMAP.
             Bitmap* bmp = new Bitmap(hCaptureBitmap, NULL);
             if (!bmp)
             {
@@ -620,12 +799,10 @@ int main(int argc, char* argv[])
                 SelectObject(hCaptureDC, hOld);
                 DeleteObject(hCaptureBitmap);
                 DeleteDC(hCaptureDC);
-                if (!captureActiveWindow && (!windowTitle.empty() || monitorIndex != -1 || regionSpecified))
-                    ReleaseDC(NULL, hSourceDC);
+                ReleaseDC(NULL, hSourceDC);
                 return false;
             }
 
-            // If timestamp annotation is enabled, overlay current time.
             if (annotateTimestamp)
             {
                 std::time_t t = std::time(nullptr);
@@ -650,8 +827,7 @@ int main(int argc, char* argv[])
                 SelectObject(hCaptureDC, hOld);
                 DeleteObject(hCaptureBitmap);
                 DeleteDC(hCaptureDC);
-                if (!captureActiveWindow && (!windowTitle.empty() || monitorIndex != -1 || regionSpecified))
-                    ReleaseDC(NULL, hSourceDC);
+                ReleaseDC(NULL, hSourceDC);
                 return false;
             }
 
@@ -692,13 +868,10 @@ int main(int argc, char* argv[])
             SelectObject(hCaptureDC, hOld);
             DeleteObject(hCaptureBitmap);
             DeleteDC(hCaptureDC);
-            if (!captureActiveWindow && (!windowTitle.empty() || monitorIndex != -1 || regionSpecified))
-                ReleaseDC(NULL, hSourceDC);
-
+            ReleaseDC(NULL, hSourceDC);
             return true;
         };
 
-    // If repeat mode is enabled, capture multiple times.
     if (repeatEnabled && repeatCount > 0)
     {
         std::wstring baseName = outputFile;
@@ -724,13 +897,9 @@ int main(int argc, char* argv[])
             ss << baseName << L"_" << std::setfill(L'0') << std::setw(3) << i + 1 << extension;
             std::wstring fileName = ss.str();
             if (!outputDir.empty())
-            {
                 fileName = outputDir + L"\\" + fileName;
-            }
             if (!captureAndSave(fileName))
-            {
                 std::wcerr << L"[ERROR] Capture iteration " << i + 1 << L" failed.\n";
-            }
             if (i < repeatCount - 1)
             {
                 if (verbose)
@@ -743,9 +912,7 @@ int main(int argc, char* argv[])
     {
         std::wstring fileName = outputFile;
         if (!outputDir.empty())
-        {
             fileName = outputDir + L"\\" + outputFile;
-        }
         captureAndSave(fileName);
     }
 
