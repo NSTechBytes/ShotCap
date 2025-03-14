@@ -1,0 +1,2 @@
+# ShotCap
+ ShotCap is a powerful, feature-rich command-line screenshot capture tool for Windows. Written in C++ using the Windows API and GDI+, ShotCap supports capturing the full desktop, specific regions, individual windows, monitors, and the active window. It also includes advanced features such as DPI awareness, mouse pointer capture, timestamp annotation, clipboard support, repeat capture (timelapse mode), JPEG quality control, output directory selection, and more.
