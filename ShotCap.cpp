@@ -4,22 +4,22 @@
 #endif
 
 #include <windows.h>
-#include <windowsx.h>  // For GET_X_LPARAM and GET_Y_LPARAM macros
+#include <windowsx.h>  // For GET_X_LPARAM, GET_Y_LPARAM macros
 #ifndef PW_RENDERFULLCONTENT
 #define PW_RENDERFULLCONTENT 0x00000002
 #endif
 
-// Fallback: if SetProcessDpiAwarenessContext is not defined, define it to call SetProcessDPIAware.
+// Fallback: if SetProcessDpiAwarenessContext is not defined, use SetProcessDPIAware.
 #ifndef SetProcessDpiAwarenessContext
 #define SetProcessDpiAwarenessContext(x) SetProcessDPIAware()
 #endif
 
-#include <gdiplus.h>  
+#include <gdiplus.h>
 #include <shellscalingapi.h>  // For DPI functions
 #include <iostream>
 #include <sstream>
 #include <vector>
-#include <string> 
+#include <string>
 #include <iomanip>
 #include <ctime>
 #include <algorithm>
@@ -30,7 +30,7 @@
 using namespace Gdiplus;
 
 //---------------------------------------------------------------------
-// Global variable to store the selected rectangle in interactive mode.
+// Global variable to store the selected rectangle (interactive mode)
 static RECT g_selRect = { 0, 0, 0, 0 };
 
 //---------------------------------------------------------------------
@@ -71,12 +71,12 @@ LRESULT CALLBACK SelectionWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
     {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hWnd, &ps);
-        // Draw a semi-transparent black overlay.
+        // Draw semi-transparent black overlay.
         HBRUSH hOverlay = CreateSolidBrush(RGB(0, 0, 0));
         SetBkMode(hdc, TRANSPARENT);
         FillRect(hdc, &ps.rcPaint, hOverlay);
         DeleteObject(hOverlay);
-        // Draw the selection rectangle (red outline).
+        // Draw red selection rectangle.
         HPEN hPen = CreatePen(PS_SOLID, 2, RGB(255, 0, 0));
         HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
         Rectangle(hdc, g_selRect.left, g_selRect.top, g_selRect.right, g_selRect.bottom);
@@ -100,11 +100,11 @@ RECT GetSelectionRect(HINSTANCE hInstance)
     wc.lpfnWndProc = SelectionWndProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
-    wc.hCursor = LoadCursor(NULL, IDC_CROSS); // Set crosshair cursor
+    wc.hCursor = LoadCursor(NULL, IDC_CROSS); // Use crosshair cursor
     RegisterClass(&wc);
 
     HWND hwnd = CreateWindowEx(
-        WS_EX_TOPMOST | WS_EX_LAYERED, // Extended styles: topmost & layered.
+        WS_EX_TOPMOST | WS_EX_LAYERED,
         CLASS_NAME, L"Select Area", WS_POPUP,
         0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
         NULL, NULL, hInstance, NULL
@@ -115,7 +115,7 @@ RECT GetSelectionRect(HINSTANCE hInstance)
         RECT r = { 0, 0, 0, 0 };
         return r;
     }
-    // Set the window opacity to 50%.
+    // Set window opacity to 50%.
     SetLayeredWindowAttributes(hwnd, 0, (BYTE)(255 * 0.5), LWA_ALPHA);
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
@@ -131,12 +131,12 @@ RECT GetSelectionRect(HINSTANCE hInstance)
 }
 
 //---------------------------------------------------------------------
-// Helper: Convert an HBITMAP to a DIB stored in global memory for clipboard use.
+// Helper: Convert an HBITMAP to a DIB stored in global memory (for clipboard).
 HGLOBAL CreateDIBFromHBITMAP(HBITMAP hBitmap)
 {
     BITMAP bm;
-    if (!GetObject(hBitmap, sizeof(bm), &bm)) 
-        return NULL; 
+    if (!GetObject(hBitmap, sizeof(bm), &bm))
+        return NULL;
     BITMAPINFOHEADER bi;
     ZeroMemory(&bi, sizeof(bi));
     bi.biSize = sizeof(BITMAPINFOHEADER);
@@ -148,7 +148,7 @@ HGLOBAL CreateDIBFromHBITMAP(HBITMAP hBitmap)
     int lineBytes = ((bm.bmWidth * bm.bmBitsPixel + 31) & ~31) / 8;
     DWORD dwSize = lineBytes * bm.bmHeight;
     DWORD dwMemSize = sizeof(BITMAPINFOHEADER) + dwSize;
-    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, dwMemSize); 
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, dwMemSize);
     if (!hMem)
         return NULL;
     LPVOID pMem = GlobalLock(hMem);
@@ -159,7 +159,7 @@ HGLOBAL CreateDIBFromHBITMAP(HBITMAP hBitmap)
     }
     memcpy(pMem, &bi, sizeof(BITMAPINFOHEADER));
     LPVOID pBits = (LPBYTE)pMem + sizeof(BITMAPINFOHEADER);
-    HDC hDC = GetDC(NULL); 
+    HDC hDC = GetDC(NULL);
     if (!hDC)
     {
         GlobalUnlock(hMem);
@@ -186,7 +186,6 @@ int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
     UINT num = 0, size = 0;
     if (GetImageEncodersSize(&num, &size) != Ok || size == 0)
         return -1;
-    // Use new[] instead of malloc to avoid warnings.
     ImageCodecInfo* pImageCodecInfo = new ImageCodecInfo[size];
     if (!pImageCodecInfo)
         return -1;
@@ -250,7 +249,7 @@ struct MonitorInfo {
     RECT rect;
 };
 
-// Callback for enumerating monitors. Parameter type is HMONITOR.
+// Callback for enumerating monitors.
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC, LPRECT lprcMonitor, LPARAM dwData)
 {
     std::vector<MonitorInfo>* monitors = reinterpret_cast<std::vector<MonitorInfo>*>(dwData);
@@ -279,7 +278,7 @@ BOOL CALLBACK EnumWindowsProc(HWND hWnd, LPARAM lParam)
 }
 
 //---------------------------------------------------------------------
-// Annotate the captured image with a timestamp at the bottom-right.
+// Annotate the captured image with a timestamp (or custom text) at bottom-right.
 void AnnotateImage(Bitmap* bmp, const std::wstring& text, bool verbose)
 {
     Graphics graphics(bmp);
@@ -287,7 +286,7 @@ void AnnotateImage(Bitmap* bmp, const std::wstring& text, bool verbose)
     graphics.SetTextRenderingHint(TextRenderingHintAntiAlias);
 
     Font font(L"Arial", 20);
-    SolidBrush brush(Color(255, 255, 255, 255)); // White text
+    SolidBrush brush(Color(255, 255, 255, 255)); // White
     SolidBrush shadowBrush(Color(128, 0, 0, 0));   // Black shadow
 
     RectF layoutRect(0, 0, static_cast<REAL>(bmp->GetWidth()), static_cast<REAL>(bmp->GetHeight()));
@@ -319,7 +318,7 @@ int main(int argc, char* argv[])
 
     // Default parameters.
     std::wstring outputFile = L"screenshot.png";
-    std::wstring outputDir = L""; // Use current directory if empty.
+    std::wstring outputDir = L""; // Current directory if empty.
     int delaySeconds = 0;
     bool regionSpecified = false;
     int regionX = 0, regionY = 0, regionW = 0, regionH = 0;
@@ -334,7 +333,7 @@ int main(int argc, char* argv[])
     bool repeatEnabled = false;
     int repeatInterval = 0;
     int repeatCount = 0;
-    int jpegQuality = 90; // Default JPEG quality.
+    int jpegQuality = 90;
     bool verbose = false;
     bool listMonitors = false;
     bool listWindows = false;
@@ -559,39 +558,17 @@ int main(int argc, char* argv[])
             HDC hSourceDC = nullptr;
             RECT captureRect = { 0, 0, 0, 0 };
 
-            // Determine capture method.
-            if (captureActiveWindow)
+            // For active window or specified window, use PrintWindow.
+            if (captureActiveWindow || !windowTitle.empty())
             {
-                HWND hWnd = GetForegroundWindow();
+                HWND hWnd = captureActiveWindow ? GetForegroundWindow() : FindWindowW(NULL, windowTitle.c_str());
                 if (!hWnd)
                 {
-                    std::wcerr << L"Failed to get active window." << std::endl;
+                    std::wcerr << L"Window not found." << std::endl;
                     return false;
                 }
                 if (verbose)
-                    std::wcout << L"[INFO] Capturing active window.\n";
-                if (!GetWindowRect(hWnd, &captureRect))
-                {
-                    std::cerr << "Failed to get active window rect." << std::endl;
-                    return false;
-                }
-                hSourceDC = GetDC(hWnd);
-                if (!hSourceDC)
-                {
-                    std::cerr << "Failed to get active window DC." << std::endl;
-                    return false;
-                }
-            }
-            else if (!windowTitle.empty())
-            {
-                HWND hWnd = FindWindowW(NULL, windowTitle.c_str());
-                if (!hWnd)
-                {
-                    std::wcerr << L"Window not found: " << windowTitle << std::endl;
-                    return false;
-                }
-                if (verbose)
-                    std::wcout << L"[INFO] Capturing window: " << windowTitle << std::endl;
+                    std::wcout << L"[INFO] Capturing window." << std::endl;
                 if (!GetWindowRect(hWnd, &captureRect))
                 {
                     std::cerr << "Failed to get window rect." << std::endl;
@@ -606,8 +583,6 @@ int main(int argc, char* argv[])
             }
             else if (monitorIndex != -1)
             {
-                if (verbose)
-                    std::wcout << L"[INFO] Capturing monitor index: " << monitorIndex << std::endl;
                 std::vector<MonitorInfo> monitors;
                 if (!EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, (LPARAM)&monitors))
                 {
@@ -630,9 +605,6 @@ int main(int argc, char* argv[])
             }
             else if (regionSpecified)
             {
-                if (verbose)
-                    std::wcout << L"[INFO] Capturing region: (" << regionX << L"," << regionY
-                    << L"," << regionW << L"," << regionH << L")\n";
                 captureRect.left = regionX;
                 captureRect.top = regionY;
                 captureRect.right = regionX + regionW;
@@ -647,8 +619,6 @@ int main(int argc, char* argv[])
             }
             else
             {
-                if (verbose)
-                    std::wcout << L"[INFO] Capturing full desktop.\n";
                 HWND hDesktopWnd = GetDesktopWindow();
                 hSourceDC = GetDC(hDesktopWnd);
                 if (!hSourceDC)
@@ -695,10 +665,10 @@ int main(int argc, char* argv[])
                 return false;
             }
 
-            // For window capture, try PrintWindow with PW_RENDERFULLCONTENT, then PW_CLIENTONLY.
-            if (!windowTitle.empty())
+            // For window capture, try using PrintWindow.
+            if (captureActiveWindow || !windowTitle.empty())
             {
-                HWND hWnd = FindWindowW(NULL, windowTitle.c_str());
+                HWND hWnd = captureActiveWindow ? GetForegroundWindow() : FindWindowW(NULL, windowTitle.c_str());
                 BOOL printResult = PrintWindow(hWnd, hCaptureDC, PW_RENDERFULLCONTENT);
                 if (!printResult)
                 {
@@ -709,15 +679,16 @@ int main(int argc, char* argv[])
                 if (!printResult)
                 {
                     if (verbose)
-                        std::wcout << L"[INFO] PrintWindow failed; falling back to desktop BitBlt capture...\n";
-                    // Fall back: capture full desktop and crop.
+                        std::wcout << L"[INFO] PrintWindow failed; falling back to BitBlt capture...\n";
+                    // Fallback: capture full desktop and crop.
                     SelectObject(hCaptureDC, hOld);
                     DeleteObject(hCaptureBitmap);
                     DeleteDC(hCaptureDC);
                     ReleaseDC(NULL, hSourceDC);
                     HWND hDesktopWnd = GetDesktopWindow();
                     hSourceDC = GetDC(hDesktopWnd);
-                    captureRect.left = 0; captureRect.top = 0;
+                    captureRect.left = 0;
+                    captureRect.top = 0;
                     captureRect.right = GetSystemMetrics(SM_CXSCREEN);
                     captureRect.bottom = GetSystemMetrics(SM_CYSCREEN);
                     capW = captureRect.right - captureRect.left;
