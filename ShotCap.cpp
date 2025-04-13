@@ -186,23 +186,31 @@ int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
     UINT num = 0, size = 0;
     if (GetImageEncodersSize(&num, &size) != Ok || size == 0)
         return -1;
-    ImageCodecInfo* pImageCodecInfo = new ImageCodecInfo[size];
+
+    // Allocate the correct number of bytes.
+    ImageCodecInfo* pImageCodecInfo = reinterpret_cast<ImageCodecInfo*>(malloc(size));
     if (!pImageCodecInfo)
         return -1;
-    GetImageEncoders(num, size, pImageCodecInfo);
+
+    if (GetImageEncoders(num, size, pImageCodecInfo) != Ok) {
+        free(pImageCodecInfo);
+        return -1;
+    }
+
     int retVal = -1;
     for (UINT j = 0; j < num; ++j)
     {
         if (wcscmp(pImageCodecInfo[j].MimeType, format) == 0)
         {
             *pClsid = pImageCodecInfo[j].Clsid;
-            retVal = j;
+            retVal = static_cast<int>(j);
             break;
         }
     }
-    delete[] pImageCodecInfo;
+    free(pImageCodecInfo);
     return retVal;
 }
+
 
 //---------------------------------------------------------------------
 // Print usage instructions.
@@ -319,7 +327,7 @@ int main(int argc, char* argv[])
     // Default parameters.
     std::wstring outputFile = L"screenshot.png";
     std::wstring outputDir = L""; // Current directory if empty.
-    int delaySeconds = 0;
+    double delaySeconds = 0.0;
     bool regionSpecified = false;
     int regionX = 0, regionY = 0, regionW = 0, regionH = 0;
     std::wstring imageFormat = L"png";
@@ -331,7 +339,7 @@ int main(int argc, char* argv[])
     bool annotateTimestamp = false;
     bool captureActiveWindow = false;
     bool repeatEnabled = false;
-    int repeatInterval = 0;
+    double repeatInterval = 0.0;
     int repeatCount = 0;
     int jpegQuality = 90;
     bool verbose = false;
@@ -368,7 +376,7 @@ int main(int argc, char* argv[])
         }
         else if (arg == "-d" && i + 1 < argc)
         {
-            delaySeconds = std::atoi(argv[i + 1]);
+            delaySeconds = std::stod(argv[i + 1]);
             i++;
         }
         else if (arg == "-r" && i + 1 < argc)
@@ -458,7 +466,7 @@ int main(int argc, char* argv[])
         }
         else if (arg == "-repeat" && i + 2 < argc)
         {
-            repeatInterval = std::atoi(argv[i + 1]);
+            repeatInterval = std::stod(argv[i + 1]);
             repeatCount = std::atoi(argv[i + 2]);
             repeatEnabled = true;
             i += 2;
@@ -540,7 +548,7 @@ int main(int argc, char* argv[])
     {
         if (verbose)
             std::wcout << L"[INFO] Waiting for " << delaySeconds << L" seconds before capturing...\n";
-        Sleep(delaySeconds * 1000);
+        Sleep(static_cast<DWORD>(delaySeconds * 1000));
     }
 
     // Initialize GDI+.
@@ -875,7 +883,8 @@ int main(int argc, char* argv[])
             {
                 if (verbose)
                     std::wcout << L"[INFO] Waiting " << repeatInterval << L" seconds before next capture...\n";
-                Sleep(repeatInterval * 1000);
+                // Convert the floating-point seconds to milliseconds.
+                Sleep(static_cast<DWORD>(repeatInterval * 1000));
             }
         }
     }
