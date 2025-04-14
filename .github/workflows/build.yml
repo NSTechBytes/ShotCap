@@ -1,0 +1,21 @@
+name: Build VS Project
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        configuration: [Release, Debug]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    - name: Build solution
+      run: msbuild ./ShotCap.sln /p:Configuration=${{ matrix.configuration }} /p:Platform=x86
+
+
