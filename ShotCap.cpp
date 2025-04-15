@@ -23,6 +23,8 @@
 #include <iomanip>
 #include <ctime>
 #include <algorithm>
+#include <chrono>
+#include <thread>
 
 #pragma comment (lib, "gdiplus.lib")
 #pragma comment (lib, "Shcore.lib")  // For DPI functions
@@ -235,7 +237,8 @@ void printUsage()
         << "  -repeat <i> <n>       Repeat capture every i seconds for n times\n"
         << "  -listmonitors         List available monitors and exit\n"
         << "  -listwindows          List visible top-level windows and exit\n"
-        << "  -v                    Enable verbose logging\n"
+        << "  -vl                   Enable verbose logging\n"
+        << "  -v, --version         Show current shotcap version\n"
         << "  -h, --help            Display this help message\n";
 }
 
@@ -354,6 +357,11 @@ int main(int argc, char* argv[])
         if (arg == "-h" || arg == "--help")
         {
             printUsage();
+            return 0;
+        }
+        else if (arg == "--version" || arg == "-v")
+        {
+            std::wcout << L"ShotCap version 1.3\n";
             return 0;
         }
         else if (arg == "-f" && i + 1 < argc)
@@ -479,7 +487,7 @@ int main(int argc, char* argv[])
         {
             listWindows = true;
         }
-        else if (arg == "-v")
+        else if (arg == "-vl")
         {
             verbose = true;
         }
@@ -851,50 +859,44 @@ int main(int argc, char* argv[])
             return true;
         };
 
-    if (repeatEnabled && repeatCount > 0)
-    {
-        std::wstring baseName = outputFile;
-        std::wstring extension = L"";
-        size_t pos = outputFile.find_last_of(L'.');
-        if (pos != std::wstring::npos)
+        if (repeatEnabled && repeatCount > 0)
         {
-            baseName = outputFile.substr(0, pos);
-            extension = outputFile.substr(pos);
+            std::wstring baseName = outputFile;
+            std::wstring extension = L"";
+            size_t pos = outputFile.find_last_of(L'.');
+            if (pos != std::wstring::npos)
+            {
+                baseName = outputFile.substr(0, pos);
+                extension = outputFile.substr(pos);
+            }
+            else
+            {
+                if (imageFormat == L"jpg")
+                    extension = L".jpg";
+                else if (imageFormat == L"bmp")
+                    extension = L".bmp";
+                else
+                    extension = L".png";
+            }
+            auto nextFrameTime = std::chrono::steady_clock::now();
+            for (int i = 0; i < repeatCount; i++)
+            {
+                std::wstringstream ss;
+                ss << baseName << L"_" << std::setfill(L'0') << std::setw(3) << i + 1 << extension;
+                std::wstring fileName = outputDir.empty() ? ss.str() : (outputDir + L"\\" + ss.str());
+                if (!captureAndSave(fileName))
+                {
+                    std::wcerr << L"[ERROR] Capture iteration " << i + 1 << L" failed.\n";
+                }
+                nextFrameTime += std::chrono::milliseconds(static_cast<int>(repeatInterval * 1000));
+                std::this_thread::sleep_until(nextFrameTime);
+            }
         }
         else
         {
-            if (imageFormat == L"jpg")
-                extension = L".jpg";
-            else if (imageFormat == L"bmp")
-                extension = L".bmp";
-            else
-                extension = L".png";
+            std::wstring fileName = outputDir.empty() ? outputFile : (outputDir + L"\\" + outputFile);
+            captureAndSave(fileName);
         }
-        for (int i = 0; i < repeatCount; i++)
-        {
-            std::wstringstream ss;
-            ss << baseName << L"_" << std::setfill(L'0') << std::setw(3) << i + 1 << extension;
-            std::wstring fileName = ss.str();
-            if (!outputDir.empty())
-                fileName = outputDir + L"\\" + fileName;
-            if (!captureAndSave(fileName))
-                std::wcerr << L"[ERROR] Capture iteration " << i + 1 << L" failed.\n";
-            if (i < repeatCount - 1)
-            {
-                if (verbose)
-                    std::wcout << L"[INFO] Waiting " << repeatInterval << L" seconds before next capture...\n";
-                // Convert the floating-point seconds to milliseconds.
-                Sleep(static_cast<DWORD>(repeatInterval * 1000));
-            }
-        }
-    }
-    else
-    {
-        std::wstring fileName = outputFile;
-        if (!outputDir.empty())
-            fileName = outputDir + L"\\" + outputFile;
-        captureAndSave(fileName);
-    }
 
     GdiplusShutdown(gdiplusToken);
     if (verbose)
